@@ -1,0 +1,19 @@
+# X (Twitter) Scraping Configuration
+# ----------------------------------
+# Define search queries, tickers, and scraping parameters.
+
+queries:
+  # Each entry maps a readable label → X search query.
+  # Use cashtags ($TICKER), hashtags, or free-text keywords.
+  - label: "tesla"
+    query: "$TSLA OR #Tesla lang:en -is:retweet"
+
+  - label: "apple"
+    query: "$AAPL OR #Apple stock lang:en -is:retweet"
+
+  - label: "sp500"
+    query: "$SPY OR #SP500 lang:en -is:retweet"
+
+defaults:
+  max_results: 500        # per query; paginated in batches of 100
+  output_dir: "data/raw/x"

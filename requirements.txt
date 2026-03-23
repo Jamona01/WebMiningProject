@@ -26,5 +26,8 @@ plotly>=5.18
 jupyter>=1.0
 ipykernel>=6.25
 
+# Config
+pyyaml>=6.0
+
 # Testing
 pytest>=7.4
