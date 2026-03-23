@@ -1,0 +1,30 @@
+# Core
+pandas>=2.0
+numpy>=1.24
+python-dotenv>=1.0
+
+# Scraping & APIs
+praw>=7.7              # Reddit
+tweepy>=4.14           # X (Twitter)
+requests>=2.31
+beautifulsoup4>=4.12
+
+# NLP / Sentiment
+transformers>=4.35
+torch>=2.1
+vaderSentiment>=3.3.2
+
+# Finance
+yfinance>=0.2.28
+
+# Visualization
+matplotlib>=3.8
+seaborn>=0.13
+plotly>=5.18
+
+# Notebooks
+jupyter>=1.0
+ipykernel>=6.25
+
+# Testing
+pytest>=7.4
