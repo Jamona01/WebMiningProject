@@ -11,10 +11,11 @@ Automated collection of daily OHLCV (Open, High, Low, Close, Volume) stock-price
 3. [Architecture](#architecture)
 4. [Configuration](#configuration)
 5. [Usage](#usage)
-6. [Scheduling & Automation](#scheduling--automation)
-7. [Storage & Deduplication](#storage--deduplication)
-8. [Testing](#testing)
-9. [Rate Limiting](#rate-limiting)
+6. [Event-Study Mode](#event-study-mode)
+7. [Scheduling & Automation](#scheduling--automation)
+8. [Storage & Deduplication](#storage--deduplication)
+9. [Testing](#testing)
+10. [Rate Limiting](#rate-limiting)
 
 ---
 
@@ -63,8 +64,10 @@ configs/
 └── tickers.yml          # Ticker list and start date (single source of truth)
 
 data/raw/prices/
-├── prices.csv           # Accumulated OHLCV data (gitignored, auto-generated)
-└── prices_meta.json     # Metadata: last update, row count, date range
+├── prices.csv           # Accumulated daily OHLCV data (auto-generated)
+├── prices_meta.json     # Metadata for daily prices
+├── events.csv           # Intraday event-study data (auto-generated)
+└── events_meta.json     # Metadata for event data
 
 .github/workflows/
 └── fetch-prices.yml     # GitHub Actions cron workflow
@@ -77,7 +80,10 @@ data/raw/prices/
 | `price_fetcher.fetch_prices()` | Downloads OHLCV data per ticker via yfinance. Handles incremental start-date calculation, error recovery, and column normalisation. |
 | `price_fetcher.save_prices()` | Merges new data into the existing CSV, deduplicates on `(Date, Ticker)`, writes metadata JSON. |
 | `price_fetcher.fetch_and_save()` | Convenience wrapper — loads existing data once, passes it to both `fetch_prices()` and `save_prices()` to avoid redundant disk reads. |
-| `scheduler.main()` | CLI entry point with `--once` and `--tickers` flags. Builds the 3× daily schedule or runs a single immediate job. |
+| `price_fetcher.fetch_event_prices()` | Downloads intraday bars (default 5 min) in a time window around a given event timestamp. |
+| `price_fetcher.save_event_prices()` | Appends event data to `events.csv`, deduplicates on `(Datetime, Ticker, Event_Time)`. |
+| `price_fetcher.fetch_and_save_event()` | Convenience wrapper for the event pipeline. |
+| `scheduler.main()` | CLI entry point with `--once`, `--tickers`, `--event-time`, `--window`, and `--interval` flags. |
 
 ---
 
@@ -150,14 +156,93 @@ nohup python -m src.finance.scheduler > scheduler.log 2>&1 &
 ### Programmatic Usage
 
 ```python
-from src.finance import fetch_and_save, fetch_prices
+from src.finance import fetch_and_save, fetch_prices, fetch_and_save_event
 
 # Full incremental run
 path = fetch_and_save()
 
 # Fetch without saving (e.g. for analysis in a notebook)
 df = fetch_prices(tickers=["AAPL", "MSFT"], start="2024-01-01", end="2024-06-01")
+
+# Event study: fetch 5-min bars ±4h around a viral post
+path = fetch_and_save_event(
+    event_time="2024-06-10T14:30:00",
+    tickers=["AAPL", "TSLA"],
+    window_hours=4.0,
+    interval="5m",
+)
 ```
+
+---
+
+## Event-Study Mode
+
+When a social media post goes viral, you want to observe how stock prices react **around that exact moment**. Event mode fetches **intraday** price bars in a configurable time window around a given timestamp.
+
+### Concept
+
+```
+        ◄──── window_hours ────►  event  ◄──── window_hours ────►
+        |                        |  ▼  |                        |
+  ──────┼────────────────────────┼──●──┼────────────────────────┼──────
+   start of fetch window    event_time    end of fetch window
+```
+
+Default: **±4 hours** with **5-minute bars** — yielding up to ~96 data points per ticker.
+
+### Data Columns — `events.csv`
+
+| Column       | Description                                              |
+|--------------|----------------------------------------------------------|
+| `Datetime`   | Full UTC timestamp (`YYYY-MM-DD HH:MM:SS`)               |
+| `Ticker`     | Stock symbol                                             |
+| `Event_Time` | The reference event timestamp that triggered this fetch  |
+| `Open`       | Price at bar open                                        |
+| `High`       | Highest price during the bar                             |
+| `Low`        | Lowest price during the bar                              |
+| `Close`      | Price at bar close                                       |
+| `Adj Close`  | Adjusted close                                           |
+| `Volume`     | Shares traded in this bar                                |
+
+The `Event_Time` column ties each row back to the viral event, so multiple events can coexist in the same file.
+
+### CLI Usage
+
+```bash
+# Basic: fetch all default tickers ±4h around the event
+python -m src.finance.scheduler --event-time 2024-06-10T14:30:00
+
+# Specific tickers only
+python -m src.finance.scheduler --event-time 2024-06-10T14:30:00 --tickers AAPL TSLA
+
+# Narrow window (±2h) with 1-minute bars
+python -m src.finance.scheduler --event-time 2024-06-10T14:30:00 --window 2 --interval 1m
+
+# Wide window (±12h) with 15-minute bars
+python -m src.finance.scheduler --event-time 2024-06-10T14:30:00 --window 12 --interval 15m
+```
+
+| Argument | Default | Description |
+|---|---|---|
+| `--event-time` | *(required)* | ISO-8601 datetime of the event (UTC if no timezone). Switches to event mode. |
+| `--tickers` | `configs/tickers.yml` | Override ticker symbols |
+| `--window` | `4` | Hours before **and** after the event to fetch |
+| `--interval` | `5m` | Bar size: `1m`, `5m`, `15m`, `1h`, etc. |
+
+> **Note:** yfinance limits intraday data to the last 60 days for `1m` bars and the last 730 days for `5m`/`15m`/`1h` bars.
+
+### GitHub Actions — Event Trigger
+
+Go to **Actions → Fetch stock prices → Run workflow** and fill in:
+
+| Input | Example | Description |
+|---|---|---|
+| `event_time` | `2024-06-10T14:30:00` | Activates event mode |
+| `tickers` | `AAPL TSLA` | Optional ticker override |
+| `window` | `4` | Hours ± event time |
+| `interval` | `5m` | Bar size |
+
+Leave `event_time` empty to run the normal daily fetch instead.
 
 ---
 
@@ -184,6 +269,9 @@ Each run:
 The workflow supports `workflow_dispatch` with optional inputs:
 - **`branch`**: Branch to run on (default: `feature/stocks-crawling`)
 - **`tickers`**: Space-separated ticker override (leave empty for default)
+- **`event_time`**: ISO-8601 datetime — activates event mode (leave empty for daily mode)
+- **`window`**: Hours before/after event (default: `4`)
+- **`interval`**: Bar size for event mode (default: `5m`)
 
 Trigger via GitHub UI: *Actions → Fetch stock prices → Run workflow*.
 
@@ -210,6 +298,16 @@ combined.drop_duplicates(subset=["Date", "Ticker"], keep="last")
 ```
 
 The `keep="last"` strategy means fresher data always wins — if Yahoo revises a value in a later run, the updated value replaces the old one.
+
+### Event Data Storage
+
+Event-study data is stored separately in `events.csv`. Deduplication uses three keys:
+
+```
+combined.drop_duplicates(subset=["Datetime", "Ticker", "Event_Time"], keep="last")
+```
+
+This means you can fetch the same event multiple times without creating duplicates, and different events for the same ticker coexist cleanly.
 
 ### Metadata
 
@@ -255,8 +353,12 @@ All tests use `unittest.mock.patch` to replace external dependencies (Yahoo Fina
 | `test_incremental_skips_up_to_date_ticker` | Tickers with data up to end date are skipped (no API call) |
 | `test_writes_csv_and_meta` | CSV and metadata JSON are written correctly |
 | `test_deduplicates_on_merge` | Overlapping date/ticker rows are deduplicated |
-| `test_returns_none_when_no_data_and_no_file` | Returns `None` when nothing fetched and no prior file exists |
-
+| `test_returns_none_when_no_data_and_no_file` | Returns `None` when nothing fetched and no prior file exists || `test_returns_intraday_data` | Event fetch produces rows with Datetime, Ticker, Event_Time |
+| `test_handles_empty_response` (event) | Event mode handles unknown tickers gracefully |
+| `test_multiple_tickers` (event) | Event fetch for N tickers produces N × rows |
+| `test_writes_events_csv` | Events CSV and metadata are written correctly |
+| `test_deduplicates_events` | Overlapping event rows are deduplicated |
+| `test_returns_none_when_no_data` (event) | Returns `None` when no event data fetched |
 ---
 
 ## Rate Limiting

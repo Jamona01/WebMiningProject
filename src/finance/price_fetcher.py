@@ -25,6 +25,9 @@ TICKERS_CONFIG = _PROJECT_ROOT / "configs" / "tickers.yml"
 PRICES_CSV = RAW_PRICES_DIR / "prices.csv"
 PRICES_META = RAW_PRICES_DIR / "prices_meta.json"
 
+EVENTS_CSV = RAW_PRICES_DIR / "events.csv"
+EVENTS_META = RAW_PRICES_DIR / "events_meta.json"
+
 
 def _load_tickers_config() -> dict:
     """Load ticker configuration from ``configs/tickers.yml``."""
@@ -56,6 +59,18 @@ COLUMN_ORDER: list[str] = [
     "Close",      # Price at market close
     "Adj Close",  # Close adjusted for splits & dividends — use for analysis
     "Volume",     # Total shares traded that day
+]
+
+EVENT_COLUMN_ORDER: list[str] = [
+    "Datetime",    # Full UTC timestamp (YYYY-MM-DD HH:MM:SS)
+    "Ticker",      # Stock symbol
+    "Event_Time",  # Reference event timestamp that triggered this fetch
+    "Open",
+    "High",
+    "Low",
+    "Close",
+    "Adj Close",
+    "Volume",
 ]
 
 
@@ -241,3 +256,154 @@ def fetch_and_save(
         logger.info("Nothing new — prices.csv unchanged.")
         return PRICES_CSV if PRICES_CSV.exists() else None
     return save_prices(new_df, existing=existing)
+
+
+# ---------------------------------------------------------------------------
+# Event-study mode: intraday prices around a specific timestamp
+# ---------------------------------------------------------------------------
+
+def _load_existing_events() -> pd.DataFrame:
+    """Load the existing events CSV, or return an empty DataFrame."""
+    if EVENTS_CSV.exists():
+        df = pd.read_csv(EVENTS_CSV, dtype={"Datetime": str, "Event_Time": str})
+        logger.info("Loaded %d existing event rows from %s.", len(df), EVENTS_CSV)
+        return df
+    return pd.DataFrame(columns=EVENT_COLUMN_ORDER)
+
+
+def fetch_event_prices(
+    event_time: str,
+    tickers: list[str] | None = None,
+    window_hours: float = 4.0,
+    interval: str = "5m",
+) -> pd.DataFrame:
+    """Fetch intraday prices in a window around *event_time*.
+
+    Args:
+        event_time: ISO-8601 datetime string (e.g. ``"2024-06-10T14:30:00"``).
+                    Interpreted as UTC if no timezone is given.
+        tickers: Ticker symbols. Defaults to ``DEFAULT_TICKERS``.
+        window_hours: Hours before **and** after *event_time* to fetch.
+                      Default ``4.0`` → 8-hour window total.
+        interval: Bar size — ``"1m"``, ``"5m"``, ``"15m"``, ``"1h"``, etc.
+                  Default ``"5m"`` (5-minute bars).
+
+    Returns:
+        Tidy DataFrame with columns ``EVENT_COLUMN_ORDER``.
+    """
+    tickers = tickers or DEFAULT_TICKERS
+    event_dt = datetime.fromisoformat(event_time)
+    if event_dt.tzinfo is None:
+        event_dt = event_dt.replace(tzinfo=timezone.utc)
+
+    window = timedelta(hours=window_hours)
+    start_dt = event_dt - window
+    end_dt = event_dt + window
+
+    event_tag = event_dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+    frames: list[pd.DataFrame] = []
+
+    for ticker in tickers:
+        logger.info(
+            "Event fetch %s  [%s ± %sh, interval=%s]",
+            ticker, event_tag, window_hours, interval,
+        )
+        try:
+            data: pd.DataFrame = yf.download(
+                ticker,
+                start=start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                end=end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                interval=interval,
+                progress=False,
+                auto_adjust=False,
+            )
+        except Exception:
+            logger.warning("Failed to download %s — skipping.", ticker, exc_info=True)
+            time.sleep(REQUEST_DELAY_SECONDS)
+            continue
+
+        if not data.empty:
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+
+            data = data.reset_index()
+            data["Ticker"] = ticker
+            data["Event_Time"] = event_tag
+
+            # Normalise datetime column
+            dt_col = "Datetime" if "Datetime" in data.columns else "Date"
+            if dt_col != "Datetime":
+                data.rename(columns={dt_col: "Datetime"}, inplace=True)
+            data["Datetime"] = (
+                pd.to_datetime(data["Datetime"], utc=True)
+                .dt.strftime("%Y-%m-%d %H:%M:%S")
+            )
+            frames.append(data)
+        else:
+            logger.warning("No event data returned for %s.", ticker)
+
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+    if not frames:
+        logger.info("No event price data fetched.")
+        return pd.DataFrame(columns=EVENT_COLUMN_ORDER)
+
+    new_data = pd.concat(frames, ignore_index=True)
+    present_cols = [c for c in EVENT_COLUMN_ORDER if c in new_data.columns]
+    new_data = new_data[present_cols]
+
+    logger.info("Fetched %d event rows for %d tickers.", len(new_data), len(frames))
+    return new_data
+
+
+def save_event_prices(new_df: pd.DataFrame) -> Path:
+    """Append *new_df* to ``events.csv`` and write metadata.
+
+    Deduplicates on ``(Datetime, Ticker, Event_Time)``.
+
+    Returns:
+        Path to the written CSV file.
+    """
+    RAW_PRICES_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing = _load_existing_events()
+    combined = pd.concat([existing, new_df], ignore_index=True)
+    combined.drop_duplicates(
+        subset=["Datetime", "Ticker", "Event_Time"], keep="last", inplace=True,
+    )
+    combined.sort_values(["Event_Time", "Ticker", "Datetime"], inplace=True)
+    combined.reset_index(drop=True, inplace=True)
+    combined.to_csv(EVENTS_CSV, index=False)
+
+    metadata = {
+        "updated_at": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "tickers": sorted(combined["Ticker"].unique().tolist()),
+        "events": sorted(combined["Event_Time"].unique().tolist()),
+        "total_rows": len(combined),
+        "yfinance_version": yf.__version__,
+    }
+    EVENTS_META.write_text(json.dumps(metadata, indent=2))
+
+    logger.info("Saved %d event rows → %s", len(combined), EVENTS_CSV)
+    return EVENTS_CSV
+
+
+def fetch_and_save_event(
+    event_time: str,
+    tickers: list[str] | None = None,
+    window_hours: float = 4.0,
+    interval: str = "5m",
+) -> Path | None:
+    """Convenience wrapper: fetch intraday event data and persist.
+
+    Returns:
+        Path to the events CSV, or ``None`` if nothing was fetched.
+    """
+    new_df = fetch_event_prices(
+        event_time=event_time, tickers=tickers,
+        window_hours=window_hours, interval=interval,
+    )
+    if new_df.empty:
+        return EVENTS_CSV if EVENTS_CSV.exists() else None
+    return save_event_prices(new_df)

@@ -8,8 +8,12 @@ import pytest
 
 from src.finance.price_fetcher import (
     COLUMN_ORDER,
+    EVENT_COLUMN_ORDER,
     fetch_and_save,
+    fetch_and_save_event,
+    fetch_event_prices,
     fetch_prices,
+    save_event_prices,
     save_prices,
 )
 
@@ -189,6 +193,167 @@ class TestFetchAndSave:
 
         with patch("src.finance.price_fetcher.PRICES_CSV", Path("/nonexistent/prices.csv")):
             result = fetch_and_save(tickers=["AAPL"])
+
+        assert result is None
+        mock_save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Event-study mode tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def sample_intraday_dataframe() -> pd.DataFrame:
+    """Mimics intraday yf.download output with a Datetime index."""
+    timestamps = pd.date_range(
+        "2024-06-10 13:00", periods=8, freq="5min", tz="UTC",
+    )
+    df = pd.DataFrame(
+        {
+            "Open": [150.0 + i for i in range(8)],
+            "High": [155.0 + i for i in range(8)],
+            "Low": [149.0 + i for i in range(8)],
+            "Close": [153.0 + i for i in range(8)],
+            "Adj Close": [153.0 + i for i in range(8)],
+            "Volume": [100_000] * 8,
+        },
+        index=timestamps,
+    )
+    df.index.name = "Datetime"
+    return df
+
+
+@patch("src.finance.price_fetcher.time.sleep")
+@patch("src.finance.price_fetcher.yf.download")
+class TestFetchEventPrices:
+    def test_returns_intraday_data(
+        self,
+        mock_download: MagicMock,
+        _mock_sleep: MagicMock,
+        sample_intraday_dataframe: pd.DataFrame,
+    ) -> None:
+        mock_download.return_value = sample_intraday_dataframe
+
+        df = fetch_event_prices(
+            event_time="2024-06-10T14:30:00",
+            tickers=["AAPL"],
+            window_hours=2.0,
+            interval="5m",
+        )
+
+        assert not df.empty
+        assert "Datetime" in df.columns
+        assert "Ticker" in df.columns
+        assert "Event_Time" in df.columns
+        assert (df["Ticker"] == "AAPL").all()
+        assert (df["Event_Time"] == "2024-06-10T14:30:00").all()
+
+    def test_handles_empty_response(
+        self, mock_download: MagicMock, _mock_sleep: MagicMock,
+    ) -> None:
+        mock_download.return_value = pd.DataFrame()
+
+        df = fetch_event_prices(
+            event_time="2024-06-10T14:30:00", tickers=["INVALID"],
+        )
+
+        assert df.empty
+
+    def test_multiple_tickers(
+        self,
+        mock_download: MagicMock,
+        _mock_sleep: MagicMock,
+        sample_intraday_dataframe: pd.DataFrame,
+    ) -> None:
+        mock_download.return_value = sample_intraday_dataframe
+
+        df = fetch_event_prices(
+            event_time="2024-06-10T14:30:00", tickers=["AAPL", "TSLA"],
+        )
+
+        assert set(df["Ticker"].unique()) == {"AAPL", "TSLA"}
+        assert len(df) == 16  # 8 rows × 2 tickers
+
+
+class TestSaveEventPrices:
+    def test_writes_events_csv(self, tmp_path: Path) -> None:
+        df = pd.DataFrame(
+            {
+                "Datetime": ["2024-06-10 14:00:00", "2024-06-10 14:05:00"],
+                "Ticker": ["AAPL", "AAPL"],
+                "Event_Time": ["2024-06-10T14:30:00", "2024-06-10T14:30:00"],
+                "Open": [150.0, 151.0],
+                "High": [155.0, 156.0],
+                "Low": [149.0, 150.0],
+                "Close": [153.0, 154.0],
+                "Adj Close": [153.0, 154.0],
+                "Volume": [100_000, 110_000],
+            }
+        )
+
+        csv = tmp_path / "events.csv"
+        meta = tmp_path / "events_meta.json"
+
+        with (
+            patch("src.finance.price_fetcher.RAW_PRICES_DIR", tmp_path),
+            patch("src.finance.price_fetcher.EVENTS_CSV", csv),
+            patch("src.finance.price_fetcher.EVENTS_META", meta),
+        ):
+            path = save_event_prices(df)
+
+        assert path.exists()
+        reloaded = pd.read_csv(path)
+        assert len(reloaded) == 2
+        assert meta.exists()
+
+    def test_deduplicates_events(self, tmp_path: Path) -> None:
+        existing = pd.DataFrame(
+            {
+                "Datetime": ["2024-06-10 14:00:00"],
+                "Ticker": ["AAPL"],
+                "Event_Time": ["2024-06-10T14:30:00"],
+                "Open": [150.0], "High": [155.0], "Low": [149.0],
+                "Close": [153.0], "Adj Close": [153.0], "Volume": [100_000],
+            }
+        )
+        csv = tmp_path / "events.csv"
+        meta = tmp_path / "events_meta.json"
+        existing.to_csv(csv, index=False)
+
+        new_df = pd.DataFrame(
+            {
+                "Datetime": ["2024-06-10 14:00:00", "2024-06-10 14:05:00"],
+                "Ticker": ["AAPL", "AAPL"],
+                "Event_Time": ["2024-06-10T14:30:00", "2024-06-10T14:30:00"],
+                "Open": [150.5, 151.0], "High": [155.0, 156.0], "Low": [149.0, 150.0],
+                "Close": [153.0, 154.0], "Adj Close": [153.0, 154.0],
+                "Volume": [100_000, 110_000],
+            }
+        )
+
+        with (
+            patch("src.finance.price_fetcher.RAW_PRICES_DIR", tmp_path),
+            patch("src.finance.price_fetcher.EVENTS_CSV", csv),
+            patch("src.finance.price_fetcher.EVENTS_META", meta),
+        ):
+            save_event_prices(new_df)
+
+        result = pd.read_csv(csv)
+        assert len(result) == 2  # not 3
+
+
+class TestFetchAndSaveEvent:
+    @patch("src.finance.price_fetcher.save_event_prices")
+    @patch("src.finance.price_fetcher.fetch_event_prices")
+    def test_returns_none_when_no_data(
+        self, mock_fetch: MagicMock, mock_save: MagicMock,
+    ) -> None:
+        mock_fetch.return_value = pd.DataFrame(columns=EVENT_COLUMN_ORDER)
+
+        with patch("src.finance.price_fetcher.EVENTS_CSV", Path("/nonexistent/events.csv")):
+            result = fetch_and_save_event(
+                event_time="2024-06-10T14:30:00", tickers=["AAPL"],
+            )
 
         assert result is None
         mock_save.assert_not_called()

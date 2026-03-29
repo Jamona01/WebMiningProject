@@ -15,6 +15,18 @@ on:
         description: "Space-separated ticker symbols (leave empty to use configs/tickers.yml)"
         required: false
         default: ""
+      event_time:
+        description: "Event datetime ISO-8601 (e.g. 2024-06-10T14:30:00) — triggers event mode"
+        required: false
+        default: ""
+      window:
+        description: "Hours before/after event time (default: 4)"
+        required: false
+        default: "4"
+      interval:
+        description: "Bar size for event mode (default: 5m)"
+        required: false
+        default: "5m"
 
 permissions:
   contents: write
@@ -35,12 +47,18 @@ jobs:
       - name: Fetch stock prices
         env:
           TICKERS: ${{ inputs.tickers }}
+          EVENT_TIME: ${{ inputs.event_time }}
+          WINDOW: ${{ inputs.window }}
+          INTERVAL: ${{ inputs.interval }}
         run: |
+          ARGS="--once"
           if [ -n "$TICKERS" ]; then
-            python -m src.finance.scheduler --once --tickers $TICKERS
-          else
-            python -m src.finance.scheduler --once
+            ARGS="$ARGS --tickers $TICKERS"
           fi
+          if [ -n "$EVENT_TIME" ]; then
+            ARGS="$ARGS --event-time $EVENT_TIME --window $WINDOW --interval $INTERVAL"
+          fi
+          python -m src.finance.scheduler $ARGS
 
       - name: Commit and push price data
         run: |

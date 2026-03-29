@@ -17,7 +17,7 @@ import time
 
 import schedule
 
-from src.finance.price_fetcher import fetch_and_save
+from src.finance.price_fetcher import fetch_and_save, fetch_and_save_event
 
 logger = logging.getLogger(__name__)
 
@@ -86,10 +86,49 @@ def main() -> None:
         metavar="SYM",
         help="Override tickers to fetch (e.g. --tickers AAPL MSFT TSLA).",
     )
+    parser.add_argument(
+        "--event-time",
+        default=None,
+        metavar="DATETIME",
+        help=(
+            "ISO-8601 datetime of an event (e.g. 2024-06-10T14:30:00). "
+            "Switches to event mode: fetches intraday data around this time."
+        ),
+    )
+    parser.add_argument(
+        "--window",
+        type=float,
+        default=4.0,
+        metavar="HOURS",
+        help="Hours before and after --event-time to fetch (default: 4).",
+    )
+    parser.add_argument(
+        "--interval",
+        default="5m",
+        metavar="INTERVAL",
+        help="Bar size for event mode (default: 5m). E.g. 1m, 5m, 15m, 1h.",
+    )
     args = parser.parse_args()
 
     if args.tickers:
         logger.info("Custom tickers: %s", args.tickers)
+
+    if args.event_time:
+        logger.info(
+            "Event mode: %s ± %sh, interval=%s",
+            args.event_time, args.window, args.interval,
+        )
+        path = fetch_and_save_event(
+            event_time=args.event_time,
+            tickers=args.tickers,
+            window_hours=args.window,
+            interval=args.interval,
+        )
+        if path:
+            logger.info("Event data saved → %s", path)
+        else:
+            logger.warning("No event data fetched.")
+        sys.exit(0)
 
     if args.once:
         _run_job(tickers=args.tickers)
