@@ -44,20 +44,57 @@ pip install twscrape yfinance
 
 ```python
 QUERIES = [
-    "$TSLA lang:en",
-    "$AAPL lang:en",
-    "$SAP lang:de OR lang:en",
-    "#stockmarket lang:en",
-    "#trading lang:en",
-    "#daytrading lang:en",
-    "#aktien lang:de",
+    # --- Energie / Oil & Gas ---
+    "#oilprice lang:en", "#oilprices lang:en", "#energystocks lang:en",
+    "#crudeoil lang:en", "#oil lang:en", "#OPEC lang:en", "#naturalgas lang:en",
+    "#Ölpreis lang:de", "#Energie lang:de", "#Erdöl lang:de", "#Benzinpreis lang:de",
+    "$XOM lang:en",  "$CVX lang:en",  "$SHEL lang:en",  "$BP lang:en",
+    "$RWE lang:de OR lang:en",
+
+    # --- Ölpumpen / Oilfield Services ---
+    "#oilfieldservices lang:en", "#oildrilling lang:en",
+    "#Ölförderung lang:de", "#Ölbohrung lang:de",
+    "$BKR lang:en",
+
+    # --- Erneuerbare Energien / Renewables ---
+    "#renewableenergy lang:en", "#renewables lang:en", "#solarenergy lang:en",
+    "#solarstocks lang:en", "#cleanenergy lang:en", "#greenenergy lang:en",
+    "#solarpanels lang:en", "#heatpump lang:en", "#heatpumps lang:en",
+    "#photovoltaic lang:en", "#gasboiler lang:en", "#gasheating lang:en",
+    "#ErneuerbareEnergien lang:de", "#Solarenergie lang:de", "#Energiewende lang:de",
+    "#Windenergie lang:de", "#Wärmepumpe lang:de", "#Wärmepumpen lang:de",
+    "#Photovoltaik lang:de", "#Solaranlage lang:de", "#Gasheizung lang:de",
+    "#Heizungswechsel lang:de", "#GEG lang:de",
+    "$ENPH lang:en", "$SEDG lang:en",
+
+    # --- Edelmetalle / Precious Metals ---
+    "#gold lang:en", "#goldinvesting lang:en", "#goldprice lang:en",
+    "#silver lang:en", "#silverprice lang:en", "#preciousmetals lang:en",
+    "#safehaven lang:en",
+    "#Goldpreis lang:de", "#Silberpreis lang:de", "#Edelmetalle lang:de",
+    "$GLD lang:en", "$SLV lang:en", "$NEM lang:en", "$GOLD lang:en",
+
+    # --- Waffenindustrie / Defense ---
+    "#defensestocks lang:en", "#defense lang:en", "#defenseindustry lang:en",
+    "#militaryspending lang:en", "#armsrace lang:en",
+    "#Rüstung lang:de", "#Rüstungsindustrie lang:de",
+    "#Verteidigung lang:de", "#Waffenindustrie lang:de",
+    "$LMT lang:en", "$RTX lang:en", "$NOC lang:en",
+    "$RHM lang:de OR lang:en",
+
+    # --- Automobil / Electric Vehicles ---
+    "#EVstocks lang:en", "#electricvehicle lang:en", "#electriccars lang:en",
+    "#EVsales lang:en", "#EV lang:en",
+    "#Elektroauto lang:de", "#Elektromobilität lang:de",
+    "#Autoindustrie lang:de", "#Autobranche lang:de",
+    "#Automobilbranche lang:de", "#Verkaufszahlen lang:de",
+    "$TSLA lang:en", "$NIO lang:en", "$RIVN lang:en", "$BYDDF lang:en",
+    "$VWAGY lang:en", "$BMWYY lang:en", "$TM lang:en",
 ]
 
-# Celebrity filter (Option A: fixed list of known accounts)
-KNOWN_ACCOUNTS = ["elonmusk", "chamath", "jimcramer"]
-
-# Or dynamically (Option B: follower threshold)
-MIN_FOLLOWERS = 100_000
+# Dynamically: follower threshold
+MIN_FOLLOWERS = 100
+MIN_LIKES = 500
 ```
 
 ---
