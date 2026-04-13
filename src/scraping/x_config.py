@@ -73,9 +73,9 @@ QUERIES: list[str] = [
 ]
 
 # Minimum follower count to keep a tweet (filters out low-influence noise)
-MIN_FOLLOWERS: int = 1000
+MIN_FOLLOWERS: int = 100
 # Minimum likes a tweet must have to be stored (0 = no filter)
-MIN_LIKES: int = 500
+MIN_LIKES: int = 100
 
 # Path to a custom Chromium executable — required on ARM (e.g. Raspberry Pi).
 # Leave empty to use Playwright's bundled Chromium (x86/x64 only).
